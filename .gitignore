@@ -1,0 +1,17 @@
+# ignore hidden files
+.*
+
+# except .gitignore file
+!.gitignore
+
+# ignore zip files
+*.zip
+
+# ignore pdf files
+*.pdf
+
+# ignore data folders
+data/
+
+# ignore __pycache__
+__pycache__/
