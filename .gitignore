@@ -15,3 +15,5 @@ data/
 
 # ignore __pycache__
 __pycache__/
+
+*.avi
