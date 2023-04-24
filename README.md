@@ -3,7 +3,7 @@ Erik Matovič
 Methods used: 
 
 ## Assignment
-### Data - pedestrian / road
+### Exploratory Data Analysis
 
 For this experiment, we used annotated videos of crossing pedestrians in three scenarios: 
 - a pedestrian is crossing a four-way until he reaches starting point,
