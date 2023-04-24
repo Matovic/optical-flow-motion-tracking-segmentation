@@ -55,7 +55,8 @@ Sparse optical flow with only 1 Shi-Tomasi Corner Detection and computation via 
 
 ```python3
 def sparse_optical_flow(cap: cv2.VideoCapture, out: cv2.VideoWriter, 
-                        ShiTomasi_params: dict, pyrLK_params: dict) -> None:
+                        ShiTomasi_params: dict, pyrLK_params: dict, 
+                        use_gamma:bool=False, gamma:float=2.0) -> None:
     """
     Sparse optical flow with only 1 Shi-Tomasi Corner Detection and 
     computation via Lucas-Kanade Optical Flow between previous and current frame.
@@ -98,8 +99,20 @@ def sparse_optical_flow(cap: cv2.VideoCapture, out: cv2.VideoWriter,
             c, d = old.ravel()
             pt1, pt2 = (int(a), int(b)), (int(c), int(d))
             mask = cv2.line(mask, pt1, pt2, color[i].tolist())
-        img = cv2.add(frame, mask)
         
+        # use for a night scenario
+        if use_gamma:
+            # preprocessing
+            frame = frame.astype(np.float32)
+            frame /= 255.0 
+            # gamma correction
+            frame = pow(frame, 1/gamma)
+            # postprocessing
+            frame *= 255.0
+            frame = frame.astype(np.uint8)
+
+        img = cv2.add(frame, mask)
+
         # write the flipped frame
         out.write(img)
         
@@ -280,8 +293,6 @@ GC_PR_FGD = 3  - a possible foreground pixel
 
 An example of GrabCut algorithm: [link](https://docs.opencv.org/4.x/dd/dfc/tutorial_js_grabcut.html) (note: This example uses a defined rectangle for grabcut segmentation. In our case we want to use the mask option instead)
 
-
-
 ```python3
 def grabcut(path:str) -> None:
     """
@@ -333,6 +344,20 @@ def grabcut(path:str) -> None:
     foreground_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype('uint8')
     foreground = cv2.bitwise_and(img, img, mask=foreground_mask)
 ```
+Our proposed method for a rough estimation of lateral ventricle:
+1. read the image
+2. convert the image to grayscale
+3. denoising by Gaussian blurring
+4. thresholding gets us the binary image
+5. morphological operations
+6. create a mask by contour analysis - draw the contour with the smallest area
+7. GrabCut algorithm on the region of interest
+8. extract the foreground from the mask
+
+The overall process:
+<p align="center">
+	<img src="./grabcut/output.png">
+</p>
 
 ### Experiment 05: VOC12 dataset segmentation
 
@@ -363,7 +388,6 @@ def dice_score(true, prediction, max_value:int=255):
     return 2.0 * np.sum(prediction[true==max_value]) / (true.sum() + prediction.sum())
 ```
 
-
 Firstly, we must binarize ground truth images for a Dice Score computation:
 ```python3
 def binarize_ground_truth(true_path:str):
@@ -377,7 +401,19 @@ def binarize_ground_truth(true_path:str):
     return cv2.threshold(true, threshold_value, max_value, cv2.THRESH_BINARY)[1]
 ```
 
-Updated grabcut:
+#### Grabcut
+Our proposed method using GrabCut algorithm for object segmentation:
+1. read the image and the ground truth
+2. convert the image to grayscale
+3. denoising by Gaussian blurring
+4. thresholding gets us the binary image
+5. morphological operations
+6. create a mask by contour analysis - draw the contours for the areas greater than 1000
+7. GrabCut algorithm on the region of interest
+8. extract the foreground from the mask
+9. binarize the ground truth
+10. compute the dice score of the ground truth and the mask
+
 ```python3
 def grabcut(img_path:str, true_path:str):
     # load the image
@@ -433,11 +469,250 @@ def grabcut(img_path:str, true_path:str):
     print(f'Dice score is {dice_score(true, mask)}')
 ```
 
+The overall process:
+<p align="center">
+	<img src="./grabcut/voc.png">
+</p>
+
+The Dice Score is not satisfying with its roughly 0.21 value. However, we have successfully removed the sky. Red ellipses show removed objects:
+<p align="center">
+	<img src="./grabcut/voc_compare.png">
+</p>
+
+
+#### Canny Edge Detection and Contour Analysis
+Our proposed method using Canny & contours for object segmentation:
+1. read the image and the ground truth
+2. convert the image to grayscale
+3. denoising
+4. Canny Edge Detection
+5. morphological operations
+6. create a mask by contour analysis - draw the contours for the areas greater than 10000
+7. binarize the ground truth
+8. compute the dice score of the ground truth and the mask
+
 
 ```python3
+def contours(img: cv2.Mat, img_input: cv2.Mat, mode: Any, method: int, are:int=10000) -> Tuple[cv2.Mat, cv2.Mat]:
+    """
+    Countour analysis
+    :param: img - original image
+    :param: img_input - image after morphological operation
+    :param: mode - mode in cv2.findContours
+    :param: method - method in cv2.findContours
+    :returns: tuple of resulting image and mask
+    """
+    img_result = img.copy()
+    prediction_ = img_input.copy()
+    img_contours, _ = cv2.findContours(img_input, mode, method)
 
+    for i in range(0, len(img_contours)):
+        if cv2.contourArea(img_contours[i]) > area:
+            cv2.drawContours(img_result, img_contours, i, (0, 255, 0), 4)
+            cv2.drawContours(prediction_, img_contours, i, (0, 255, 0), 4)
+        i += 1
+        
+    return img_result, prediction_
 ```
 
 ```python3
+def canny_contour_segmentation(img_path:str, gt_path:str, area:int=10000):
+    # read img
+    img = cv2.imread(img_path)
 
+    # grayscale
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # blurring
+    img_gauss = cv2.GaussianBlur(img_gray, (5,5), 0)
+
+    # canny edge detection
+    img_canny = cv2.Canny(img_gauss, 50, 300)
+
+    # morphology operation
+    element = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    img_dilate = cv2.dilate(img_canny,(7, 7), iterations=5)
+    img_erode = cv2.erode(img_dilate, kernel=(11,11))
+    img_closing = cv2.morphologyEx(img_erode, cv2.MORPH_CLOSE, element, iterations=1)
+    
+    img_result, prediction = contours(img, img_closing, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, area)
+
+    true = binarize_ground_truth(gt_path)
+    
+    dice_s = dice_score(prediction, true, 255) 
+    print ("Dice Similarity: {}".format(dice_s))
 ```
+
+The Dice Score is not satisfying with its roughly 0.42 value. However, it is a better than with the Grab Cut algorithm. The overall process:
+<p align="center">
+	<img src="./voc12/canny_contour_process.png">
+</p>
+
+#### Watershed
+Our proposed method uses the watershed algorithm for object segmentation:
+1. read the image and the ground truth
+2. convert the image to grayscale
+3. denoising
+4. OTSU thresholding
+5. morphological operations to make the foreground
+6. apply watershed
+7. make prediction mask from given labels
+8. binarize the ground truth
+9. compute the dice score of the ground truth and the mask
+
+```python3
+def watershade(img_path:str, gt_path:str):
+    """
+    Inspired by OpenCV tutorial:
+    https://docs.opencv.org/4.x/d3/db4/tutorial_py_watershed.html
+    """
+    # read img
+    img = cv2.imread(img_path)
+    img_result = img.copy()
+
+    # grayscale
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # blurring
+    img_gauss = cv2.GaussianBlur(img_gray, (5,5), 0)
+
+    # thresholding
+    ret, thresh = cv2.threshold(img_gauss, 127, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        
+    # morphology operations - make foreground
+    kernel = np.ones((3,3),np.uint8)
+    closing = cv2.morphologyEx(thresh,cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    # sure foreground area
+    sure_fg = cv2.dilate(closing,kernel,iterations=1)
+
+    # Marker labelling
+    ret, markers = cv2.connectedComponents(sure_fg)
+
+    # Add one to all labels so that sure background is not 0, but 1
+    markers = markers+1
+
+    markers = cv2.watershed(img, markers)
+    # small plane
+    img_result[markers == 3] = [255,0,0]
+    # parts of a larger plane
+    img_result[markers == 7] = [255,0,0]
+    img_result[markers == 8] = [255,0,0]
+    img_result[markers == 9] = [255,0,0]
+    img_result[markers == 10] = [255,0,0]
+    img_result[markers == 11] = [255,0,0]
+    img_result[markers == 12] = [255,0,0]
+
+    prediction = np.zeros(img_result.shape[:-1], dtype=np.uint8)
+    # small plane
+    prediction[markers == 3] = [255]
+    # parts of a larger plane
+    prediction[markers == 7] = [255]
+    prediction[markers == 8] = [255]
+    prediction[markers == 9] = [255]
+    prediction[markers == 10] = [255]
+    prediction[markers == 11] = [255]
+    prediction[markers == 12] = [255]
+
+    true = binarize_ground_truth(gt_path)
+
+    dice_s = dice_score(prediction, true, 255) 
+    print ("Dice Score: {}".format(dice_s))
+```
+The Dice Score is not satisfying with its roughly 0.37 value. However, we have successfully segmented a more distant aeroplane and parts of the closer plane. The overall process:
+<p align="center">
+	<img src="./voc12/watershed.png">
+</p>
+
+
+#### SEED Superpixels followed by Watershed
+Our proposed method uses the SEED superpixels and then apply the watershed algorithm for object segmentation:
+1. read the image and the ground truth
+2. convert the image to grayscale
+3. denoising
+4. apply SEED superpixels
+5. apply watershed
+6. make prediction mask from given labels
+7. binarize the ground truth
+8. compute the dice score of the ground truth and the mask
+
+```python3
+def superpixels_watershed(img_path:str, gt_path:str):
+    """
+    superpixels followed by watershed
+    """
+    # read img
+    img = cv2.imread(img_path)
+    img_result = img.copy()
+
+    # grayscale
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # blurring
+    img_gauss = cv2.GaussianBlur(img_gray, (5,5), 0)
+
+    # Adjust the parameters as needed
+    img_width = img_gauss.shape[1]
+    img_height = img_gauss.shape[0]
+    img_channels = 1  # for grayscale image
+    num_superpixels = 100
+    num_levels = 4
+    prior = 2
+    histogram_bins = 100000
+    double_step = True
+
+    # Create SuperpixelSEEDS object
+    seeds = cv2.ximgproc.createSuperpixelSEEDS(img_width, 
+                                            img_height, 
+                                            img_channels, 
+                                            num_superpixels, 
+                                            num_levels, 
+                                            prior, 
+                                            histogram_bins, 
+                                            double_step)
+
+    # Initialize superpixels
+    seeds.iterate(img_gauss, 100)
+
+    # superpixels contour mask
+    contour_mask = seeds.getLabelContourMask()
+    contour_mask[contour_mask == 255] = 1
+
+    contour_mask = cv2.bitwise_not(contour_mask)
+
+    # Get the labels
+    labels = seeds.getLabels()
+
+    # Set mask
+    mask = np.zeros_like(contour_mask, dtype=np.int32)
+    for i in range(num_superpixels):
+        mask[labels == i] = i
+
+    # Apply watershed algorithm
+    markers = cv2.watershed(img, mask)
+
+    # make prediction masks
+    prediction = np.zeros(img_result.shape[:-1], dtype=np.uint8)
+    prediction[markers == 12] = [255]
+    prediction[markers == 23] = [255]
+    prediction[markers == 24] = [255]
+    prediction[markers == 25] = [255]
+    prediction[markers == 26] = [255]
+
+    # results
+    img_result[markers == 12] = [0, 0, 255]
+    img_result[markers == 23] = [0, 0, 255]
+    img_result[markers == 24] = [0, 0, 255]
+    img_result[markers == 25] = [0, 0, 255]
+    img_result[markers == 26] = [0, 0, 255]
+
+    true = binarize_ground_truth(gt_path)
+
+    dice_s = dice_score(prediction, true, 255) 
+    print ("Dice Score: {}".format(dice_s))
+```
+
+The Dice Score is the best we have achieved, with its roughly 0.55 value. This is because our segmentation covers more of the ground truth labels. The overall process:
+<p align="center">
+	<img src="./voc12/superpixels_watershed.png">
+</p>
