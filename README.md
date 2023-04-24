@@ -1,6 +1,14 @@
 # Optical flow, motion tracking, segmentation, stereo vision
 Erik Matovič   
-Methods used: 
+Methods used: sparse optical flow, dense optical flow, background subtraction, grabcut, superpixels, watershade segmentation
+
+## Usage
+To run Jupyter Notebook, you need OpenCV and matplotlib. You can install them using pip:  
+```bash
+pip install opencv-contrib-python matplotlib numpy
+```
+
+[OpenCV documentation](https://docs.opencv.org/4.7.0/)
 
 ## Assignment
 ### Exploratory Data Analysis
@@ -14,7 +22,7 @@ In the end, we used classical approaches of motion tracking utilizing sparse and
 
 Dataset: https://www.kaggle.com/datasets/smeschke/pedestrian-dataset?resource=download
 
-
+### Data Preprocessing
 We have utilized OpenCV objects for working with video capture, and for saving outcomes as videos, we have used video writer:
 ```python3
 def get_cap_out(video_path:str, out_root:str='..', start_idx:int=15) -> Tuple[cv2.VideoCapture,
@@ -38,7 +46,7 @@ def get_cap_out(video_path:str, out_root:str='..', start_idx:int=15) -> Tuple[cv
     return cap, out
 ```
 
-### Sparse optical flow
+### Experiment 01: Sparse optical flow
 Visualize trajectories of moving objects.
 
 Use following functions: cv::goodFeaturesToTrack, cv::calcOpticalFlowPyrLK
@@ -205,7 +213,7 @@ def sparse_optical_flow2(cam: cv2.VideoCapture, out: cv2.VideoWriter,
     cv2.destroyAllWindows()
 ```
 
-### Dense optical flow
+### Experiment 02: Dense optical flow
 
 Identify moving objects in video and draw green rectangle around them.
 
@@ -219,7 +227,13 @@ Motion tracking Datasets
 
 Feel free to experiment with multiple videos for motion tracking. Use the following link for additional datasets - https://motchallenge.net/data/MOT15/
 
-### Segmentation using background subtraction
+
+
+```python3
+
+```
+
+### Experiment 03: Segmentation using background subtraction
 
 Use background substraction methods to properly segment the moving objects from their background. Use one of the videos with static camera.
 
@@ -230,7 +244,19 @@ Use the following approaches:
     Mixture of Gaussian (MOG2)
 
 
-### Grab Cut segmentation
+
+```python3
+
+```
+
+
+
+```python3
+
+```
+
+
+### Experiment 04: Grab Cut segmentation
 
 Propose a simple method to segment a rough estimate of lateral ventricle segmentation using morphological processing and thresholding.
 
@@ -252,15 +278,166 @@ GC_PR_BGD = 2 - a possible background pixel
 
 GC_PR_FGD = 3  - a possible foreground pixel
 
-An example of GrabCut algorithm: link (note: This example uses a defined rectangle for grabcut segmentation. In our case we want to use the mask option instead)
+An example of GrabCut algorithm: [link](https://docs.opencv.org/4.x/dd/dfc/tutorial_js_grabcut.html) (note: This example uses a defined rectangle for grabcut segmentation. In our case we want to use the mask option instead)
 
 
-## Usage
-To run Jupyter Notebook, you need OpenCV and matplotlib. You can install them using pip:  
-```bash
-pip install opencv-python matplotlib
+
+```python3
+def grabcut(path:str) -> None:
+    """
+    GrabCut implementation.
+    :param path: image path
+    """
+    # load the image
+    img = cv2.imread(path)
+
+    # convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Gaussian blurring to denoise image
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # threshold the image
+    ret, thresh = cv2.threshold(blur, 127, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+
+    # morphological operations
+    kernel = np.ones((3,3), np.uint8)
+    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=5)
+    opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel, iterations=5)
+    
+    # contours analysis
+    contours, _ = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    # mask for the region of interest (ROI)
+    mask = np.zeros(img.shape[:2], np.uint8)
+
+    # draw contour on mask
+    for i in range(0, len(contours)):
+        # lateral ventricle is a small part of a brain, so smaller area is favourable
+        if cv2.contourArea(contours[i]) < 10000:
+            cv2.drawContours(mask, contours, i, (255, 255, 255), cv2.FILLED)
+        i += 1
+
+    # Define background and foreground models
+    bgdModel = np.zeros((1, 65), np.float64)
+    fgdModel = np.zeros((1, 65), np.float64)
+
+    # no rectangle - based on the assignment
+    rect = None 
+    mask[mask==255] = 1
+
+    # GrabCut on the ROI
+    mask, bgdModel, fgdModel = cv2.grabCut(img, mask, rect, bgdModel, fgdModel, iterCount=5, mode=cv2.GC_PR_FGD)
+
+    # extract the foreground from the mask
+    foreground_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype('uint8')
+    foreground = cv2.bitwise_and(img, img, mask=foreground_mask)
 ```
 
-[OpenCV documentation](https://docs.opencv.org/4.7.0/)
+### Experiment 05: VOC12 dataset segmentation
 
-## Solution
+JPEG images: [link](https://drive.google.com/file/d/1MTgdBUwwBljzHIGz3bIqdLfu4qPx-PuP/view?pli=1) 
+
+Ground truth labels: [link](https://drive.google.com/file/d/1lR-Ihrg7yE0YVS9PxZTW-_XT6C8rZEnc/view)
+
+Propose a simple method for object segmentation. Pick 1-2 images from the provided dataset. You may use one or multiple segmentation methods such as:
+
+    grabcut
+
+    superpixel segmentation
+
+    floodfill
+
+    thresholding
+
+    and so on..
+
+Use provided ground truth label to compute Dice Score with your prediction (you may chose only 1 specific object for segmentation in case of multiple objects presented in the image)
+
+Dice Score computation:
+```python3
+def dice_score(true, prediction, max_value:int=255):
+    """
+    2 * |A ∩ B| / (|A| + |B|)
+    """
+    return 2.0 * np.sum(prediction[true==max_value]) / (true.sum() + prediction.sum())
+```
+
+
+Firstly, we must binarize ground truth images for a Dice Score computation:
+```python3
+def binarize_ground_truth(true_path:str):
+    """
+    returns: binary image of a ground truth 
+    """
+    true = cv2.imread(true_path)
+    true = cv2.cvtColor(true, cv2.COLOR_BGR2GRAY)
+    threshold_value = 0
+    max_value = 255
+    return cv2.threshold(true, threshold_value, max_value, cv2.THRESH_BINARY)[1]
+```
+
+Updated grabcut:
+```python3
+def grabcut(img_path:str, true_path:str):
+    # load the image
+    img = cv2.imread(img_path)
+
+    # load binarized ground truth
+    true = binarize_ground_truth(true_path)
+
+    # convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Gaussian blur to denoise image
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # threshold the image
+    ret, thresh = cv2.threshold(blur, 127, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+
+    # morphological operations
+    kernel = np.ones((3,3), np.uint8)
+    closing = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=5)
+    opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel, iterations=5)
+
+    # contours analysis
+    contours, _ = cv2.findContours(opening, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    # create a mask for the region of interest (ROI)
+    mask = np.zeros(img.shape[:2], np.uint8) # np.zeros_like(opening)
+
+    # Draw contour on mask
+    for i in range(0, len(contours)):
+        # update from previous grabcut - ignore small areas
+        if cv2.contourArea(contours[i]) > 1000:
+            cv2.drawContours(mask, contours, i, (255, 255, 255), cv2.FILLED)
+        i += 1
+
+    # Define background and foreground models
+    bgdModel = np.zeros((1, 65), np.float64)
+    fgdModel = np.zeros((1, 65), np.float64)
+    
+    # Perform GrabCut on the ROI
+    rect = None 
+    mask[mask==255] = 1
+    
+    mask, bgdModel, fgdModel = cv2.grabCut(img, mask, rect, bgdModel, fgdModel, iterCount=5, mode=cv2.GC_PR_FGD)
+
+    # extract the foreground from the mask
+    foreground_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype('uint8')
+    foreground = cv2.bitwise_and(img, img, mask=foreground_mask)
+
+    # for a Dice Score
+    mask[mask == 1] = 255
+
+    print(f'Dice score is {dice_score(true, mask)}')
+```
+
+
+```python3
+
+```
+
+```python3
+
+```
