@@ -128,6 +128,10 @@ def sparse_optical_flow(cap: cv2.VideoCapture, out: cv2.VideoWriter,
     out.release()
     cv2.destroyAllWindows()
 ```
+Motion tracking via Sparse Optical Flow with only 1 Shi-Tomasi Corner Detection and computation via Lucas-Kanade Optical Flow between the previous and current frame:
+<p align="center">
+	<img src="./sparse_optical_flow/sparse_optical_flow_method1.png">
+</p>
 
 Sparse optical flow with Shi-Tomasi Corner Detection updating in every five frames. Lucas-Kanade Optical Flow computation done between the previous and current frame and the current and previous frame. We use threshold filtering after Euclidian distance computation between two optical flows to choose appropriate tracking points. We have also manipulated a mask and skipped the upper third of a region of interest because the movement in the sky is not expected:
 
@@ -226,6 +230,11 @@ def sparse_optical_flow2(cam: cv2.VideoCapture, out: cv2.VideoWriter,
     cv2.destroyAllWindows()
 ```
 
+Motion tracking via Sparse optical flow with Shi-Tomasi Corner Detection updating in every n frames. Lucas-Kanade Optical Flow computation done between the previous and current frame and the current and previous frame. This is a more accurate and sensitive approach to motion tracking:
+<p align="center">
+	<img src="./sparse_optical_flow/sparse_optical_flow_method2.png">
+</p>
+
 ### Experiment 02: Dense optical flow
 
 Identify moving objects in video and draw green rectangle around them.
@@ -241,10 +250,88 @@ Motion tracking Datasets
 Feel free to experiment with multiple videos for motion tracking. Use the following link for additional datasets - https://motchallenge.net/data/MOT15/
 
 
+We are reading frames from a video capture object and appling optical flow analysis, thresholding, morphological operations, and contour detection to segment moving objects in the video. The segmented objects are then drawn on the frame as bounding boxes and written via video writer:
 
 ```python3
-
+def dense_optical_flow(cap: cv2.VideoCapture, out: cv2.VideoWriter,
+                       farneback_params: dict, use_gamma:bool=False, gamma:float=2.0):# -> None:
+    """ 
+    """
+    # read the first frame
+    ret, frame1 = cap.read()
+    # grayscale
+    prvs = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    # initialize an empty HSV image 
+    hsv = np.zeros_like(frame1)
+    # set the saturation channel to max
+    hsv[..., 1] = 255
+    # read the next frame
+    ret, frame2 = cap.read()
+    # loop until no more frames are available
+    while(ret):
+        # grayscale
+        next = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        # dense optical flow by Farneback method between the previous and current frames
+        flow = cv2.calcOpticalFlowFarneback(
+            prev=prvs,      # first 8-bit single-channel input image 
+            next=next,      # second input img with the same size and the same type as prev
+            **farneback_params)
+        # magnitude and angle of the optical flow vectors
+        mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        #magnitute computetion via Pythagorean theorem
+        mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
+        # map the angle values to the hue channel
+        hsv[..., 0] = (ang * 180) / (2 * np.pi)
+        # normalize the magnitude values to the value channel 
+        hsv[..., 2] = cv2.normalize(mag, None, 0.0, 255.0, cv2.NORM_MINMAX)
+        # HSV to BGR
+        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        # grayscale
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        # binary mask of the moving objects using the threshold value
+        _, mask = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
+        # create a structuring element for morphological operations
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+        # opening on the binary mask to remove small objects and smooth the boundaries
+        dilated = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+        # dilate the binary mask
+        dilated = cv2.dilate(dilated, kernel, iterations=2)
+        # closing
+        dilated = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel)
+        # contour analysis
+        (contours, hierarchy) = cv2.findContours(
+            dilated.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # use for a night scenario
+        if use_gamma:
+            # preprocessing
+            frame2 = frame2.astype(np.float32)
+            frame2 /= 255.0 
+            # gamma correction
+            frame2 = pow(frame2, 1/gamma)
+            # postprocessing
+            frame2 *= 255.0
+            frame2 = frame2.astype(np.uint8)
+        # filter contours
+        for i, c in enumerate(contours):
+            # get boundig box
+            (x, y, w, h) = cv2.boundingRect(c)
+            if w < 50 or h < 50 or w > 900 or h > 800:
+                continue
+            color = (0, 255, 0)
+            # draw bounding boxes
+            cv2.rectangle(frame2, (x, y), (x + w, y + h), color, 2)
+        # write frame with bounding boxes
+        out.write(frame2)
+        # update frames
+        prvs = next
+        ret, frame2 = cap.read()
+    cv2.destroyAllWindows()
 ```
+
+Pedestrian detection using dense optical flow and contour analysis depends on the parameters that must be picked and handcrafted for traditional computer vision algorithms.:
+<p align="center">
+	<img src="./dense_optical_flow/dense_optical_flow.png">
+</p>
 
 ### Experiment 03: Segmentation using background subtraction
 
@@ -257,17 +344,74 @@ Use the following approaches:
     Mixture of Gaussian (MOG2)
 
 
-
+MOG2 removes the background of a video so that only the foreground objects are visible:
 ```python3
+def MOG2(cap: cv2.VideoCapture, video_path: str, MOG2_params:dict, start_idx:int=15) -> None:
+    """
+    Remove the background of a video so that only the foreground objects are visible.
+    :param start_idx: to create output file based on the input video path
+    """
+    # make video writer for MOG2
+    frame_width = int(cap.get(3))
+    frame_height = int(cap.get(4))
+    out = cv2.VideoWriter(out_root + video_path[start_idx:-4] + '.avi', cv2.VideoWriter_fourcc('M','J','P','G'), 10, (frame_width,frame_height), isColor=False)
+    # background subtraction
+    backSub = cv2.createBackgroundSubtractorMOG2(**MOG2_params)
+    # read the first frame
+    ret, frame = cap.read()
+    while(ret):
+        # subtracts the background from the current frame and store the binary mask
+        mask = backSub.apply(frame)
+        # write the mask
+        out.write(mask)
+        # read the next frame
+        ret, frame = cap.read()
+    cv2.destroyAllWindows()
+```
+The default parameters(history=500, threshold=16) and enabled detection of shadows shows more detailed moving pedestrian. It also shows some white dots in the background reminiscent of the Salt and Pepper noise:
+<p align="center">
+	<img src="./MOG2/mog2_default.png">
+</p>
 
+MOG2 with the lower history(10) and higher threshold(100) with disabled detecting shadows shows more insufficient detail in the moving pedestrian. Thus white dots from the background are also removed:
+<p align="center">
+	<img src="./MOG2/mog2.png">
+</p>
+
+Accumulated weighted image removes the moving objects so that only static background can be seen:
+```python3
+def accumulated_weighted_image(cap: cv2.VideoCapture, out: cv2.VideoWriter, alpha=0.1) -> None:
+    """
+    :param cap: video capture
+    :param out: video writer
+    :param alpha: regulates the update speed, how fast the accumulator “forgets” about earlier images. 
+        - if alpha is a higher value, average image tries to catch even very fast and short changes in the data. 
+        - if it is lower value, average becomes won't consider fast changes in the input images
+    """
+    ret, frame = cap.read()
+
+    avg1 = np.float32(frame)
+
+    while(ret):
+        cv2.accumulateWeighted(src=frame, dst=avg1, alpha=alpha)
+
+        # scaling, taking an absolute value, conversion to an unsigned 8-bit type: 
+        avg_img = cv2.convertScaleAbs(avg1)
+
+        out.write(avg_img)
+        ret, frame = cap.read()
+    cv2.destroyAllWindows()
 ```
 
+Accumulated weighted images with the lower alpha remove moving objects to keep only the static background. In some parts of the video, where a pedestrian is not moving, such as waiting for the green traffic light, he can be slightly seen as a ghost figure:
+<p align="center">
+	<img src="./accumulated_weighted_image/awi_lower_alpha.png">
+</p>
 
-
-```python3
-
-```
-
+Accumulated weighted images with a higher alpha make a pedestrian visible although he is blurred:
+<p align="center">
+	<img src="./accumulated_weighted_image/awi_higher_alpha.png">
+</p>
 
 ### Experiment 04: Grab Cut segmentation
 
@@ -481,6 +625,7 @@ The Dice Score is not satisfying with its roughly 0.21 value. However, we have s
 
 
 #### Canny Edge Detection and Contour Analysis
+
 Our proposed method using Canny & contours for object segmentation:
 1. read the image and the ground truth
 2. convert the image to grayscale
@@ -513,9 +658,8 @@ def contours(img: cv2.Mat, img_input: cv2.Mat, mode: Any, method: int, are:int=1
         i += 1
         
     return img_result, prediction_
-```
 
-```python3
+
 def canny_contour_segmentation(img_path:str, gt_path:str, area:int=10000):
     # read img
     img = cv2.imread(img_path)
@@ -625,7 +769,8 @@ The Dice Score is not satisfying with its roughly 0.37 value. However, we have s
 </p>
 
 
-#### SEED Superpixels followed by Watershed
+#### SEED Superpixels followed by Watershed  
+
 Our proposed method uses the SEED superpixels and then apply the watershed algorithm for object segmentation:
 1. read the image and the ground truth
 2. convert the image to grayscale
